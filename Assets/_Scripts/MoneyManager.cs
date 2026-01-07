@@ -1,66 +1,106 @@
-using UnityEngine;
+﻿using UnityEngine;
 using TMPro;
 using Unity.Netcode;
 
-public class MoneyManager : MonoBehaviour
+public class MoneyManager : NetworkBehaviour
 {
-    public static MoneyManager Instance; // singleton for easy access
+    public static MoneyManager Instance;
 
-    [SerializeField] private TMP_Text moneyText; // assign in inspector
-    private int money = 0;
+    [SerializeField] private TMP_Text moneyText;
+
+    // This is the synchronized money value
+    private NetworkVariable<int> syncedMoney = new NetworkVariable<int>(
+        0,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server  // Only server can change it
+    );
 
     private void Awake()
     {
-        // Each client has their own MoneyManager instance
         if (Instance == null)
         {
             Instance = this;
-            DontDestroyOnLoad(gameObject); // Optional: persist across scenes
+            DontDestroyOnLoad(gameObject);
         }
         else
         {
             Destroy(gameObject);
             return;
         }
-
-        UpdateUI();
     }
 
-    private void Start()
+    public override void OnNetworkSpawn()
     {
-        // Double-check UI is visible on start
-        UpdateUI();
-        Debug.Log($"MoneyManager started on Client {(NetworkManager.Singleton != null ? NetworkManager.Singleton.LocalClientId.ToString() : "NoNetwork")}");
+        // Update UI when value changes (including initial sync)
+        syncedMoney.OnValueChanged += OnMoneyChanged;
+        UpdateUI(syncedMoney.Value); // Initial update
+
+        if (IsServer)
+        {
+            Debug.Log("MoneyManager: Server initialized money to 0");
+        }
     }
 
+    public override void OnNetworkDespawn()
+    {
+        syncedMoney.OnValueChanged -= OnMoneyChanged;
+    }
+
+    private void OnMoneyChanged(int previous, int current)
+    {
+        UpdateUI(current);
+        Debug.Log($"[SYNCED] Money changed: {previous} → {current} (Client {NetworkManager.Singleton.LocalClientId})");
+    }
+
+    private void UpdateUI(int amount)
+    {
+        if (moneyText != null)
+        {
+            moneyText.text = $"$ {amount}";
+        }
+    }
+
+    // Call this from anywhere (e.g., when player collects coin)
     public void AddMoney(int amount)
     {
-        money += amount;
-        UpdateUI();
-        Debug.Log($"[LOCAL CLIENT] Money added: {amount}. Total: {money}");
+        if (!IsServer)
+        {
+            // Clients ask server to add money
+            AddMoneyServerRpc(amount);
+        }
+        else
+        {
+            // Server directly adds
+            syncedMoney.Value += amount;
+        }
+    }
+
+    [ServerRpc(RequireOwnership = false)] // Anyone can request money add
+    private void AddMoneyServerRpc(int amount)
+    {
+        syncedMoney.Value += amount;
     }
 
     public int GetMoney()
     {
-        return money;
+        return syncedMoney.Value;
     }
 
     public void ResetMoney()
     {
-        money = 0;
-        UpdateUI();
-    }
-
-    private void UpdateUI()
-    {
-        if (moneyText != null)
+        if (IsServer)
         {
-            moneyText.text = $"$ {money}";
-            Debug.Log($"UI Updated: ${money}");
+            syncedMoney.Value = 0;
         }
         else
         {
-            Debug.LogWarning("MoneyText UI reference is missing!");
+            ResetMoneyServerRpc();
         }
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    private void ResetMoneyServerRpc()
+    {
+        syncedMoney.Value = 0;
     }
 }

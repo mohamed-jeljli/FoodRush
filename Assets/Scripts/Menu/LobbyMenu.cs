@@ -13,7 +13,6 @@ using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.Networking.Transport.Relay;
 
-// Alias to avoid conflict with your gameplay Players class
 using LobbyPlayer = Unity.Services.Lobbies.Models.Player;
 
 public class LobbyMenu : Panel
@@ -36,60 +35,80 @@ public class LobbyMenu : Panel
     private bool isReady = false;
     private bool isHost = false;
     private string eventsLobbyId = "";
-    private bool isStarted = false;
     private bool isJoining = false;
 
     public override void Initialize()
     {
         if (IsInitialized) return;
+
         ClearPlayersList();
+
         closeButton.onClick.AddListener(ClosePanel);
         leaveButton.onClick.AddListener(LeaveLobby);
         readyButton.onClick.AddListener(SwitchReady);
         startButton.onClick.AddListener(StartGame);
+
         base.Initialize();
+    }
+
+    // This method is added back so other scripts (like LobbySettingsMenu) can keep using it without errors
+    public async Task UpdateLobby(UpdateLobbyOptions options)
+    {
+        if (lobby == null) return;
+
+        try
+        {
+            lobby = await LobbyService.Instance.UpdateLobbyAsync(lobby.Id, options);
+            LoadPlayers(); // Refresh player list in case something changed
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("Failed to update lobby: " + ex.Message);
+        }
     }
 
     private async void StartGame()
     {
         PanelManager.Open("loading");
+
         try
         {
+            // Create Relay allocation
             Allocation allocation = await RelayService.Instance.CreateAllocationAsync(lobby.MaxPlayers);
             var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
             var serverData = AllocationUtils.ToRelayServerData(allocation, "dtls");
             transport.SetRelayServerData(serverData);
 
+            // Get join code
             string code = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
 
+            // Save session info
             SessionManager.role = SessionManager.Role.Host;
             SessionManager.joinCode = code;
             SessionManager.lobbyID = lobby.Id;
 
+            // Update lobby data with join code
             await SetLobbyStarting(code);
 
-            StartingSessionMenu panel = (StartingSessionMenu)PanelManager.GetSingleton("start");
-            heartbeatPeriod = 5f;
+            // Clean up lobby events
             await UnsubscribeToEventsAsync();
-            panel.StartGameByLobby(lobby, false);
-        }
-        catch (Exception ex)
-        {
-            Debug.Log(ex.Message);
-        }
-        PanelManager.Close("loading");
-    }
 
-    public async Task UpdateLobby(UpdateLobbyOptions options)
-    {
-        if (lobby == null) return;
-        try
-        {
-            lobby = await LobbyService.Instance.UpdateLobbyAsync(lobby.Id, options);
+            // Close all UI panels and menu canvas
+            PanelManager.CloseAll();
+            if (MenuManager.Singleton != null) MenuManager.Singleton.CloseCanvas();
+
+            // Start the network as Host (exactly like your MainMenu host button)
+            NetworkManager.Singleton.StartHost();
+
+            // OPTIONAL: Load a dedicated game scene (uncomment if needed)
+            // NetworkManager.Singleton.SceneManager.LoadScene("GameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+
+            Debug.Log("Host successfully started the game via Lobby + Relay!");
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError("Failed to start game: " + ex.Message);
+            PanelManager.Close("loading");
         }
     }
 
@@ -109,7 +128,7 @@ public class LobbyMenu : Panel
         }
         catch (Exception e)
         {
-            Debug.Log(e.Message);
+            Debug.LogError("Failed to set lobby starting: " + e.Message);
         }
     }
 
@@ -117,11 +136,13 @@ public class LobbyMenu : Panel
     {
         if (lobby == null) return;
 
+        // Clients poll for join code to auto-join
         if (!isHost && !isJoining)
         {
             CheckStartGameStatus();
         }
 
+        // Host heartbeat
         if (lobby.HostId == AuthenticationService.Instance.PlayerId && !sendingHeartbeat)
         {
             updateTimer += Time.deltaTime;
@@ -142,7 +163,7 @@ public class LobbyMenu : Panel
         }
         catch (Exception exception)
         {
-            Debug.Log(exception.Message);
+            Debug.LogError(exception.Message);
         }
         sendingHeartbeat = false;
     }
@@ -153,33 +174,27 @@ public class LobbyMenu : Panel
         {
             _ = SubscribeToEventsAsync(lobby.Id);
         }
+
         this.lobby = lobby;
         nameText.text = lobby.Name;
 
         CheckStartGameStatus();
-
         startButton.gameObject.SetActive(false);
         isHost = false;
 
         LoadPlayers();
-        Open();
+        base.Open();
     }
 
     private void CheckStartGameStatus()
     {
-        StartingSessionMenu panel = (StartingSessionMenu)PanelManager.GetSingleton("start");
-        isStarted = lobby.Data.ContainsKey("started");
-        string joinCode = lobby.Data.ContainsKey("join_code") ? lobby.Data["join_code"].Value : null;
-
-        if (!panel.isLoading && isStarted)
+        if (lobby.Data != null && lobby.Data.ContainsKey("join_code"))
         {
-            panel.StartGameByLobby(lobby, true);
-        }
-
-        if (!isJoining && panel.isLoading && !string.IsNullOrEmpty(joinCode) && !panel.isConfirmed)
-        {
-            panel.StartGameByLobby(lobby, true);
-            JoinGame(joinCode);
+            string joinCode = lobby.Data["join_code"].Value;
+            if (!isJoining && !string.IsNullOrEmpty(joinCode))
+            {
+                JoinGame(joinCode);
+            }
         }
     }
 
@@ -189,6 +204,7 @@ public class LobbyMenu : Panel
 
         isJoining = true;
         PanelManager.Open("loading");
+
         try
         {
             JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
@@ -200,35 +216,45 @@ public class LobbyMenu : Panel
             SessionManager.joinCode = joinCode;
             SessionManager.lobbyID = lobby.Id;
 
-            StartingSessionMenu panel = (StartingSessionMenu)PanelManager.GetSingleton("start");
             await UnsubscribeToEventsAsync();
-            panel.StartGameConfirm();
+
+            PanelManager.CloseAll();
+            if (MenuManager.Singleton != null) MenuManager.Singleton.CloseCanvas();
+
+            // Start network as Client (exactly like your MainMenu client button)
+            NetworkManager.Singleton.StartClient();
+
+            Debug.Log("Client successfully joined the game via Lobby + Relay!");
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError("Failed to join game: " + ex.Message);
             await Leave();
             isJoining = false;
-            PanelManager.Close("start");
         }
-        PanelManager.Close("loading");
+        finally
+        {
+            PanelManager.Close("loading");
+        }
     }
 
     private void LoadPlayers()
     {
         ClearPlayersList();
+
         bool isEveryoneReady = true;
         bool youAreMember = false;
 
         for (int i = 0; i < lobby.Players.Count; i++)
         {
             LobbyPlayer lp = lobby.Players[i];
-            bool ready = lp.Data.ContainsKey("ready") && lp.Data["ready"].Value == "1";
+            bool ready = lp.Data != null && lp.Data.ContainsKey("ready") && lp.Data["ready"].Value == "1";
 
             LobbyPlayerItem item = Instantiate(lobbyPlayerItemPrefab, lobbyPlayersContainer);
             item.Initialize(lp, lobby.Id, lobby.HostId);
 
-            string playerId = lp.Data.ContainsKey("id") ? lp.Data["id"].Value : "";
+            string playerId = lp.Data != null && lp.Data.ContainsKey("id") ? lp.Data["id"].Value : "";
+
             if (playerId == AuthenticationService.Instance.PlayerId)
             {
                 youAreMember = true;
@@ -241,6 +267,7 @@ public class LobbyMenu : Panel
 
         startButton.gameObject.SetActive(isHost);
         if (isHost) startButton.interactable = isEveryoneReady;
+
         if (!youAreMember) Close();
     }
 
@@ -277,9 +304,12 @@ public class LobbyMenu : Panel
         {
             ErrorMenu panel = (ErrorMenu)PanelManager.GetSingleton("error");
             panel.Open(ErrorMenu.Action.None, "Failed to create the lobby.", "OK");
-            Debug.Log(exception.Message);
+            Debug.LogError(exception.Message);
         }
-        PanelManager.Close("loading");
+        finally
+        {
+            PanelManager.Close("loading");
+        }
     }
 
     public async void JoinLobby(string id)
@@ -308,9 +338,12 @@ public class LobbyMenu : Panel
         {
             ErrorMenu panel = (ErrorMenu)PanelManager.GetSingleton("error");
             panel.Open(ErrorMenu.Action.None, "Failed to join the lobby.", "OK");
-            Debug.Log(exception.Message);
+            Debug.LogError(exception.Message);
         }
-        PanelManager.Close("loading");
+        finally
+        {
+            PanelManager.Close("loading");
+        }
     }
 
     private void ClearPlayersList()
@@ -324,7 +357,7 @@ public class LobbyMenu : Panel
 
     private void ClosePanel()
     {
-        Close(); // from Panel base class
+        Close();
     }
 
     private void LeaveLobby()
@@ -346,9 +379,12 @@ public class LobbyMenu : Panel
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError(ex.Message);
         }
-        PanelManager.Close("loading");
+        finally
+        {
+            PanelManager.Close("loading");
+        }
     }
 
     private async Task<bool> SubscribeToEventsAsync(string lobbyId)
@@ -357,15 +393,15 @@ public class LobbyMenu : Panel
         {
             var callbacks = new LobbyEventCallbacks();
             callbacks.LobbyChanged += OnChanged;
-            callbacks.LobbyEventConnectionStateChanged += OnConnectionChanged;
             callbacks.KickedFromLobby += OnKicked;
+
             events = await LobbyService.Instance.SubscribeToLobbyEventsAsync(lobbyId, callbacks);
             eventsLobbyId = lobbyId;
             return true;
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError(ex.Message);
             return false;
         }
     }
@@ -382,7 +418,7 @@ public class LobbyMenu : Panel
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError(ex.Message);
         }
     }
 
@@ -409,19 +445,20 @@ public class LobbyMenu : Panel
         }
         catch (Exception ex)
         {
-            Debug.Log(ex.Message);
+            Debug.LogError(ex.Message);
         }
-        readyButton.interactable = true;
+        finally
+        {
+            readyButton.interactable = true;
+        }
     }
 
-    // Event callbacks
     private void OnKicked()
     {
         if (IsOpen) Close();
         lobby = null;
         events = null;
         isJoining = false;
-        isStarted = false;
     }
 
     private void OnChanged(ILobbyChanges changes)
@@ -432,17 +469,11 @@ public class LobbyMenu : Panel
             lobby = null;
             events = null;
             isJoining = false;
-            isStarted = false;
             return;
         }
 
         changes.ApplyToLobby(lobby);
         CheckStartGameStatus();
         if (IsOpen) LoadPlayers();
-    }
-
-    private async void OnConnectionChanged(LobbyEventConnectionState state)
-    {
-        await Task.CompletedTask;
     }
 }

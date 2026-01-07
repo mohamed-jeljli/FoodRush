@@ -1,11 +1,12 @@
-﻿using UnityEngine;
-using System;
-using Unity.Services.Authentication;
-using Unity.Services.Core;
-using Unity.Services.Vivox;
-using System.Threading.Tasks;
+﻿using System;
 using System.Collections;
-
+using System.Threading.Tasks;
+using Unity.Services.Authentication;
+using Unity.Services.Authentication.PlayerAccounts;
+using Unity.Services.Core;
+using Unity.Services.Authentication.PlayerAccounts;
+using Unity.Services.Vivox;
+using UnityEngine;
 
 public class MenuManager : MonoBehaviour
 {
@@ -149,7 +150,54 @@ public class MenuManager : MonoBehaviour
             ShowError(ErrorMenu.Action.OpenAuthMenu, "Failed to connect to the network", "ok");
         }
     }
+    public async void SignInWithUnityPlayerAccountsAsync()
+    {
+        PanelManager.Open("loading");
 
+        try
+        {
+            // Subscribe to the SignedIn event (fires when browser callback succeeds)
+            PlayerAccountService.Instance.SignedIn += OnPlayerAccountsSignedIn;
+
+            // Start the browser sign-in flow
+            await PlayerAccountService.Instance.StartSignInAsync();
+        }
+        catch (Exception ex)
+        {
+            PlayerAccountService.Instance.SignedIn -= OnPlayerAccountsSignedIn; // Clean up
+            Debug.LogError("Unity Player Accounts start failed: " + ex.Message);
+            ShowError(ErrorMenu.Action.OpenAuthMenu, "Failed to start sign in with Unity", "OK");
+            PanelManager.Close("loading");
+        }
+    }
+
+    private async void OnPlayerAccountsSignedIn()
+    {
+        // Unsubscribe to avoid multiple calls
+        PlayerAccountService.Instance.SignedIn -= OnPlayerAccountsSignedIn;
+
+        try
+        {
+            // Now use the AccessToken (not IdToken!) — this is what Unity docs recommend
+            if (string.IsNullOrEmpty(PlayerAccountService.Instance.AccessToken))
+            {
+                throw new Exception("Access token missing after sign-in");
+            }
+
+            await AuthenticationService.Instance.SignInWithUnityAsync(PlayerAccountService.Instance.AccessToken);
+
+            await OnSignedIn(); // Your existing success flow (Vivox, etc.)
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("Unity Authentication sign-in failed: " + ex.Message);
+            ShowError(ErrorMenu.Action.OpenAuthMenu, "Failed to sign in with Unity", "OK");
+        }
+        finally
+        {
+            PanelManager.Close("loading");
+        }
+    }
     private async Task OnSignedIn()
     {
         Debug.Log("✅ Unity Authentication complete, now logging into Vivox...");

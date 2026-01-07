@@ -12,7 +12,7 @@ public class AuthenticationMenu : Panel
     [SerializeField] private Button signinButton = null;
     [SerializeField] private Button signupButton = null;
     [SerializeField] private Button anonymousButton = null;
-
+    [SerializeField] private Button unitySignInButton = null;
     public override void Initialize()
     {
         if (IsInitialized)
@@ -22,6 +22,7 @@ public class AuthenticationMenu : Panel
         anonymousButton.onClick.AddListener(AnonymousSignIn);
         signinButton.onClick.AddListener(SignIn);
         signupButton.onClick.AddListener(SignUp);
+        unitySignInButton.onClick.AddListener(UnityPlayerAccountsSignIn);
         base.Initialize();
     }
 
@@ -64,7 +65,10 @@ public class AuthenticationMenu : Panel
             }
         }
     }
-    
+    private void UnityPlayerAccountsSignIn()
+    {
+        MenuManager.Singleton.SignInWithUnityPlayerAccountsAsync();
+    }
     private bool IsPasswordValid(string password)
     {
         if (password.Length < 8 || password.Length > 30)

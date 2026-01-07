@@ -921,11 +921,11 @@ PlayerSettings:
   captureStartupLogs: {}
   activeInputHandler: 2
   windowsGamepadBackendHint: 0
-  cloudProjectId: 3e05c507-13dd-4cbd-aade-afa385e806ab
+  cloudProjectId: 483d8c6a-0faf-4067-bba2-3e52a87a3524
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: step by step (2)
-  organizationId: jeljlimohamed99
+  projectName: step by step
+  organizationId: baldi_07
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}
